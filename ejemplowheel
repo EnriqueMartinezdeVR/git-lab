@@ -1,0 +1,171 @@
+import fs from 'fs';
+
+const defaultSides = 9;
+const defaultRadius = 1;
+const defaultWidth = 0.5;
+
+const args = process.argv.slice(2);
+const sides = parseInt(args[0]) || defaultSides;
+const radius = parseFloat(args[1]) || defaultRadius;
+const width = parseFloat(args[2]) || defaultWidth;
+
+if (sides < 3 || sides > 360 || radius <= 0 || width <= 0) {
+    console.error("Argumentos inválidos. Asegúrate de que el número de lados esté entre 3 y 360, y que el radio y ancho sean positivos.");
+    process.exit(1);
+}
+
+function normalize(vector) {
+    const length = Math.sqrt(vector[0] ** 2 + vector[1] ** 2 + vector[2] ** 2);
+    return length > 0 ? vector.map(component => component / length) : vector;
+}
+
+function generateWheelOBJ(sides, radius, width) {
+    const vertices = [];
+    const faces = [];
+    const normals = [];
+    const indices = [];
+
+    const halfWidth = width / 2;
+
+    for (let i = 0; i < sides; i++) {
+        const angle = (2 * Math.PI * i) / sides;
+        const x = -Math.sin(angle) * radius;
+        const y = Math.cos(angle) * radius;
+
+        vertices.push([y, x, halfWidth]);
+        vertices.push([y, x, -halfWidth]);
+    }
+
+    for (let i = 0; i < sides; i++) {
+        const nextIndex = (i + 1) % sides;
+
+        const v1 = i * 2;
+        const v2 = nextIndex * 2;
+        const v3 = i * 2 + 1;
+        const v4 = nextIndex * 2 + 1;
+
+        // Caras laterales
+        indices.push(v1, v2, v3);
+        indices.push(v3, v2, v4);
+
+        const normal = normalize([0, 0, 1]);
+        normals.push(normal);
+        normals.push(normal);
+    }
+
+    const centerFrontIndex = vertices.length;
+    const centerBackIndex = vertices.length + 1;
+
+    vertices.push([0, 0, halfWidth]);
+    vertices.push([0, 0, -halfWidth]);
+
+    const frontNormal = normalize([0, 0, 1]);
+    const backNormal = normalize([0, 0, -1]);
+
+    for (let i = 0; i < sides; i++) {
+        const nextIndex = (i + 1) % sides;
+        const v1 = i * 2;
+        const v2 = nextIndex * 2;
+        const v3 = centerFrontIndex;
+
+        const v4 = i * 2 + 1;
+        const v5 = nextIndex * 2 + 1;
+        const v6 = centerBackIndex;
+
+        // Cara frontal y posterior
+        indices.push(v3, v2, v1);
+        indices.push(v6, v4, v5);
+
+        normals.push(frontNormal);
+        normals.push(backNormal);
+    }
+
+    return { vertices, indices, normals };
+}
+
+function createOBJFile(sides, radius, width) {
+    const { vertices, indices, normals } = generateWheelOBJ(sides, radius, width);
+    let objContent = "";
+
+    vertices.forEach(v => {
+        objContent += `v ${v[0]} ${v[1]} ${v[2]}\n`;
+    });
+
+    normals.forEach(n => {
+        objContent += `vn ${n[0]} ${n[1]} ${n[2]}\n`;
+    });
+
+    indices.forEach((i, index) => {
+        objContent += `f ${i + 1}//${index + 1}\n`;
+    });
+
+    fs.writeFileSync('wheel2.obj', objContent);
+    console.log("Archivo 'wheel2.obj' generado exitosamente.");
+}
+
+createOBJFile(sides, radius, width);
+
+
+function parseOBJ(objContent) {
+    const jsonObject = {
+        a_position: {
+            numComponents: 3,
+            data: []
+        },
+        a_color: {
+            numComponents: 4,
+            data: []
+        },
+        a_normal: {
+            numComponents: 3,
+            data: []
+        },
+        a_texCoord: {
+            numComponents: 2,
+            data: []
+        },
+        indices: []
+    };
+
+    const lines = objContent.split('\n');
+    lines.forEach(line => {
+        const parts = line.trim().split(/\s+/);
+
+        if (parts[0] === 'v') {
+            // Procesa las posiciones de los vértices
+            jsonObject.a_position.data.push(...parts.slice(1).map(parseFloat));
+            // Añade un color por cada vértice (RGB: 0.4, 0.4, 0.4 y Alfa: 1.0)
+            jsonObject.a_color.data.push(0.4, 0.4, 0.4, 1.0);
+        } else if (parts[0] === 'vn') {
+            // Procesa las normales
+            jsonObject.a_normal.data.push(...parts.slice(1).map(parseFloat));
+        } else if (parts[0] === 'f') {
+            // Procesa las caras (índices de los vértices)
+            const faceIndices = parts.slice(1).map(part => parseInt(part.split('/')[0]) - 1);
+            jsonObject.indices.push(...faceIndices);
+        }
+    });
+
+    // Ajusta los datos para que coincidan con el formato deseado:
+    // 1. Si hay más vértices de los necesarios, recortamos para tener solo 24 vértices.
+    if (jsonObject.a_position.data.length > 72) {
+        jsonObject.a_position.data = jsonObject.a_position.data.slice(0, 72); // 24 vértices * 3 coordenadas = 72
+    }
+    if (jsonObject.a_normal.data.length > 24) {
+        jsonObject.a_normal.data = jsonObject.a_normal.data.slice(0, 24); // 24 normales * 3 componentes = 72
+    }
+    
+    // 2. Recorta o ajusta los índices para que coincidan con las caras del cubo (24 vértices)
+    jsonObject.indices = jsonObject.indices.slice(0, 36); // Asegúrate de que solo hay 36 índices para el cubo (12 caras * 3 vértices)
+
+    // Elimina coordenadas de textura vacías (en el JSON original no las necesitamos)
+    jsonObject.a_texCoord.data = [];
+
+    // Escribe el JSON resultante a un archivo
+    fs.writeFileSync('wheel.json', JSON.stringify(jsonObject));
+    console.log("Archivo 'wheel.json' generado exitosamente.");
+}
+
+// Leer el archivo OBJ (suponiendo que el archivo 'cube.obj' contiene los datos OBJ)
+const objContent = fs.readFileSync('wheel.obj', 'utf8');
+parseOBJ(objContent);
